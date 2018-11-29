@@ -1,0 +1,65 @@
+{
+  "name": "protocol",
+  "version": "1.0.0",
+  "description": "Magic Protocol implementation. ",
+  "main": "truffle.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "lint": "npm run eslint && npm run solium",
+    "eslint": "./node_modules/.bin/eslint util/** test/**",
+    "solium": "./node_modules/.bin/solium --dir ./contracts",
+    "ganache": "./node_modules/.bin/ganache-cli -l 0x663BE0 -a 100",
+    "clean": "rm -rf build/contracts",
+    "compile": "truffle compile --all",
+    "test:coverage": "SOLIDITY_COVERAGE=true bash scripts/run_ganache.sh && ./node_modules/.bin/solidity-coverage || true",
+    "test:coverage:coveralls": "npm run test:coverage && cat coverage/lcov.info | ./node_modules/.bin/coveralls",
+    "test:unit": "bash scripts/run_ganache.sh && truffle test test/unit/*",
+    "test:integration": "bash scripts/run_ganache.sh && truffle test test/integration/*",
+    "migrate": "truffle migrate --reset",
+    "docker:build": "docker build --cache-from magic/protocol:latest --tag magic/protocol:latest -f Dockerfile .",
+    "docker:push": "docker push magic/protocol:latest",
+    "docker:run:lint": "docker run --rm --entrypoint=npm magic/protocol:latest run lint",
+    "docker:run:test:coverage": "docker run -e COVERALLS_REPO_TOKEN=$COVERALLS_REPO_TOKEN --rm --entrypoint=npm magic/protocol:latest run test:coverage:coveralls",
+    "docker:run:test:unit": "docker run --rm --entrypoint=npm magic/protocol:latest run test:unit",
+    "docker:run:test:integration": "docker run --rm --entrypoint=npm magic/protocol:latest run test:integration"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/magic/protocol.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/magic/protocol/issues"
+  },
+  "homepage": "https://github.com/magic/protocol#readme",
+  "devDependencies": {
+    "babel-polyfill": "^6.23.0",
+    "babel-preset-es2015": "^6.24.1",
+    "babel-preset-stage-2": "^6.24.1",
+    "babel-preset-stage-3": "^6.24.1",
+    "babel-register": "^6.24.1",
+    "bignumber.js": "^4.0.1",
+    "chai": "^4.1.2",
+    "coveralls": "^3.0.2",
+    "eslint": "^4.3.0",
+    "eslint-config-google": "^0.9.1",
+    "ethereumjs-abi": "github:ethereumjs/ethereumjs-abi#09c3c48fd3bed143df7fa8f36f6f164205e23796",
+    "ethereumjs-util": "^5.1.2",
+    "ganache-cli": "^6.1.0-beta.0",
+    "mkdirp": "^0.5.1",
+    "mocha-lcov-reporter": "^1.3.0",
+    "solidity-coverage": "^0.4.9",
+    "solium": "^1.1.8",
+    "truffle": "4.1.14",
+    "truffle-keystore-provider": "^1.0.2",
+    "openzeppelin-solidity": "^2.0.0-rc.2",
+    "zeppelin-solidity": "1.5.0",
+    "dotenv": "^6.1.0",
+    "truffle-flattener": "^1.2.9",
+    "truffle-hdwallet-provider": "0.0.7-beta.1"
+  }
+}

@@ -1,0 +1,11 @@
+*.swp
+*.swo
+node_modules/
+build/
+.DS_Store/
+bin/
+abi/
+*.iml
+*.env
+_test/
+github/
