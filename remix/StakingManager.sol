@@ -295,35 +295,28 @@ contract ManagerProxyTarget is Manager {
  */
 contract IStakingManager {
 
-    event TranscoderUpdate(address indexed transcoder, uint256 pendingRewardCut, uint256 pendingFeeShare, uint256 pendingPricePerSegment, bool registered);
-    event TranscoderEvicted(address indexed transcoder);
-    event TranscoderResigned(address indexed transcoder);
+    event EnablerUpdate(address indexed enabler, uint256 pendingRewardCut, uint256 pendingFeeShare, uint256 pendingPricePerSegment, bool registered);
+    event EnablerEvicted(address indexed enabler);
+    event EnablerResigned(address indexed enabler);
 
-    event TranscoderSlashed(address indexed transcoder, address finder, uint256 penalty, uint256 finderReward);
-    event Reward(address indexed transcoder, uint256 amount);
+    event EnablerSlashed(address indexed enabler, address finder, uint256 penalty, uint256 finderReward);
+    event Reward(address indexed enabler, uint256 amount);
     event Bond(address indexed newDelegate, address indexed oldDelegate, address indexed delegator, uint256 additionalAmount, uint256 bondedAmount);
     event Unbond(address indexed delegate, address indexed delegator, uint256 unbondingLockId, uint256 amount, uint256 withdrawRound);
     event Rebond(address indexed delegate, address indexed delegator, uint256 unbondingLockId, uint256 amount);
     event WithdrawStake(address indexed delegator, uint256 unbondingLockId, uint256 amount, uint256 withdrawRound);
     event WithdrawFees(address indexed delegator);
 
-    // Deprecated events
-    // These event signatures can be used to construct the appropriate topic hashes to filter for past logs corresponding
-    // to these deprecated events.
-    // event Bond(address indexed delegate, address indexed delegator);
-    // event Unbond(address indexed delegate, address indexed delegator);
-    // event WithdrawStake(address indexed delegator);
-
     // External functions
-    function setActiveTranscoders() external;
-    function updateTranscoderWithFees(address _transcoder, uint256 _fees, uint256 _round) external;
-    function slashTranscoder(address _transcoder, address _finder, uint256 _slashAmount, uint256 _finderFee) external;
-    function electActiveTranscoder(uint256 _maxPricePerSegment, bytes32 _blockHash, uint256 _round) external view returns (address);
+    function setActiveEnablers() external;
+    function updateEnablerWithFees(address _enabler, uint256 _fees, uint256 _round) external;
+    function slashEnabler(address _enabler, address _finder, uint256 _slashAmount, uint256 _finderFee) external;
+    function electActiveEnabler(uint256 _maxPricePerSegment, bytes32 _blockHash, uint256 _round) external view returns (address);
 
     // Public functions
-    function transcoderTotalStake(address _transcoder) public view returns (uint256);
-    function activeTranscoderTotalStake(address _transcoder, uint256 _round) public view returns (uint256);
-    function isRegisteredTranscoder(address _transcoder) public view returns (bool);
+    function enablerTotalStake(address _enabler) public view returns (uint256);
+    function activeEnablerTotalStake(address _enabler, uint256 _round) public view returns (uint256);
+    function isRegisteredEnabler(address _enabler) public view returns (bool);
     function getTotalBonded() public view returns (uint256);
 }
 
@@ -1548,7 +1541,7 @@ library Math {
 // File: contracts/staking/StakingManager.sol
 
 /**
- * @title StakingManager
+ * @title StakingManager (WIP)
  * @dev Manages staking and rewards/fee accounting related operations of the Magic protocol
  */
 contract StakingManager is ManagerProxyTarget, IStakingManager {
@@ -1557,27 +1550,27 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
     using SortedDoublyLL for SortedDoublyLL.Data;
     using EarningsPool for EarningsPool.Data;
 
-    // Time between unbonding and possible withdrawl in rounds
+    // Time between unbonding and possible withdrawal in rounds
     uint64 public unbondingPeriod;
-    // Number of active transcoders
-    uint256 public numActiveTranscoders;
+    // Number of active enablers
+    uint256 public numActiveEnablers;
     // Max number of rounds that a caller can claim earnings for at once
     uint256 public maxEarningsClaimsRounds;
 
-    // Represents a transcoder's current state
-    struct Transcoder {
-        uint256 lastRewardRound;                             // Last round that the transcoder called reward
-        uint256 rewardCut;                                   // % of reward paid to transcoder by a delegator
-        uint256 feeShare;                                    // % of fees paid to delegators by transcoder
-        uint256 pricePerSegment;                             // Price per segment (denominated in LPT units) for a stream
-        uint256 pendingRewardCut;                            // Pending reward cut for next round if the transcoder is active
-        uint256 pendingFeeShare;                             // Pending fee share for next round if the transcoder is active
-        uint256 pendingPricePerSegment;                      // Pending price per segment for next round if the transcoder is active
+    // Represents a enabler's current state
+    struct Enabler {
+        uint256 lastRewardRound;                             // Last round that the enabler called reward
+        uint256 rewardCut;                                   // % of reward paid to enabler by a delegator
+        uint256 feeShare;                                    // % of fees paid to delegators by enabler
+        uint256 pricePerSegment;                             // Price per segment (denominated in MGC units) for a stream
+        uint256 pendingRewardCut;                            // Pending reward cut for next round if the enabler is active
+        uint256 pendingFeeShare;                             // Pending fee share for next round if the enabler is active
+        uint256 pendingPricePerSegment;                      // Pending price per segment for next round if the enabler is active
         mapping (uint256 => EarningsPool.Data) earningsPoolPerRound;  // Mapping of round => earnings pool for the round
     }
 
-    // The various states a transcoder can be in
-    enum TranscoderStatus { NotRegistered, Registered }
+    // The various states a enabler can be in
+    enum EnablerStatus { NotRegistered, Registered }
 
     // Represents a delegator's current state
     struct Delegator {
@@ -1601,25 +1594,25 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
         uint256 withdrawRound;       // Round at which unbonding period is over and tokens can be withdrawn
     }
 
-    // Keep track of the known transcoders and delegators
+    // Keep track of the known enablers and delegators
     mapping (address => Delegator) private delegators;
-    mapping (address => Transcoder) private transcoders;
+    mapping (address => Enabler) private enablers;
 
     // Keep track of total bonded tokens
     uint256 private totalBonded;
 
-    // Candidate and reserve transcoders
-    SortedDoublyLL.Data private transcoderPool;
+    // Candidate and reserve enablers
+    SortedDoublyLL.Data private enablerPool;
 
-    // Represents the active transcoder set
-    struct ActiveTranscoderSet {
-        address[] transcoders;
+    // Represents the active enabler set
+    struct ActiveEnablerSet {
+        address[] enablers;
         mapping (address => bool) isActive;
         uint256 totalStake;
     }
 
-    // Keep track of active transcoder set for each round
-    mapping (uint256 => ActiveTranscoderSet) public activeTranscoderSet;
+    // Keep track of active enabler set for each round
+    mapping (uint256 => ActiveEnablerSet) public activeEnablerSet;
 
     // Check if sender is JobsManager
     modifier onlyJobsManager() {
@@ -1662,29 +1655,29 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
     }
 
     /**
-     * @dev Set max number of registered transcoders. Only callable by Controller owner
-     * @param _numTranscoders Max number of registered transcoders
+     * @dev Set max number of registered enablers. Only callable by Controller owner
+     * @param _numEnablers Max number of registered enablers
      */
-    function setNumTranscoders(uint256 _numTranscoders) external onlyControllerOwner {
-        // Max number of transcoders must be greater than or equal to number of active transcoders
-        require(_numTranscoders >= numActiveTranscoders);
+    function setNumEnablers(uint256 _numEnablers) external onlyControllerOwner {
+        // Max number of enablers must be greater than or equal to number of active enablers
+        require(_numEnablers >= numActiveEnablers);
 
-        transcoderPool.setMaxSize(_numTranscoders);
+        enablerPool.setMaxSize(_numEnablers);
 
-        emit ParameterUpdate("numTranscoders");
+        emit ParameterUpdate("numEnablers");
     }
 
     /**
-     * @dev Set number of active transcoders. Only callable by Controller owner
-     * @param _numActiveTranscoders Number of active transcoders
+     * @dev Set number of active enablers. Only callable by Controller owner
+     * @param _numActiveEnablers Number of active enablers
      */
-    function setNumActiveTranscoders(uint256 _numActiveTranscoders) external onlyControllerOwner {
-        // Number of active transcoders cannot exceed max number of transcoders
-        require(_numActiveTranscoders <= transcoderPool.getMaxSize());
+    function setNumActiveEnablers(uint256 _numActiveEnablers) external onlyControllerOwner {
+        // Number of active enablers cannot exceed max number of enablers
+        require(_numActiveEnablers <= enablerPool.getMaxSize());
 
-        numActiveTranscoders = _numActiveTranscoders;
+        numActiveEnablers = _numActiveEnablers;
 
-        emit ParameterUpdate("numActiveTranscoders");
+        emit ParameterUpdate("numActiveEnablers");
     }
 
     /**
@@ -1698,27 +1691,27 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
     }
 
     /**
-     * @dev The sender is declaring themselves as a candidate for active transcoding.
-     * @param _rewardCut % of reward paid to transcoder by a delegator
-     * @param _feeShare % of fees paid to delegators by a transcoder
+     * @dev The sender is declaring themselves as a candidate for active enabling.
+     * @param _rewardCut % of reward paid to enabler by a delegator
+     * @param _feeShare % of fees paid to delegators by a enabler
      * @param _pricePerSegment Price per segment (denominated in Wei) for a stream
      */
-    function transcoder(uint256 _rewardCut, uint256 _feeShare, uint256 _pricePerSegment)
+    function enabler(uint256 _rewardCut, uint256 _feeShare, uint256 _pricePerSegment)
         external
         whenSystemNotPaused
         currentRoundInitialized
     {
-        Transcoder storage t = transcoders[msg.sender];
+        Enabler storage t = enablers[msg.sender];
         Delegator storage del = delegators[msg.sender];
 
         if (roundsManager().currentRoundLocked()) {
             // If it is the lock period of the current round
-            // the lowest price previously set by any transcoder
+            // the lowest price previously set by any enabler
             // becomes the price floor and the caller can lower its
             // own price to a point greater than or equal to the price floor
 
-            // Caller must already be a registered transcoder
-            require(transcoderStatus(msg.sender) == TranscoderStatus.Registered);
+            // Caller must already be a registered enabler
+            require(enablerStatus(msg.sender) == EnablerStatus.Registered);
             // Provided rewardCut value must equal the current pendingRewardCut value
             // This value cannot change during the lock period
             require(_rewardCut == t.pendingRewardCut);
@@ -1726,18 +1719,18 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
             // This value cannot change during the lock period
             require(_feeShare == t.pendingFeeShare);
 
-            // Iterate through the transcoder pool to find the price floor
-            // Since the caller must be a registered transcoder, the transcoder pool size will always at least be 1
+            // Iterate through the enabler pool to find the price floor
+            // Since the caller must be a registered enabler, the enabler pool size will always at least be 1
             // Thus, we can safely set the initial price floor to be the pendingPricePerSegment of the first
-            // transcoder in the pool
-            address currentTranscoder = transcoderPool.getFirst();
-            uint256 priceFloor = transcoders[currentTranscoder].pendingPricePerSegment;
-            for (uint256 i = 0; i < transcoderPool.getSize(); i++) {
-                if (transcoders[currentTranscoder].pendingPricePerSegment < priceFloor) {
-                    priceFloor = transcoders[currentTranscoder].pendingPricePerSegment;
+            // enabler in the pool
+            address currentEnabler = enablerPool.getFirst();
+            uint256 priceFloor = enablers[currentEnabler].pendingPricePerSegment;
+            for (uint256 i = 0; i < enablerPool.getSize(); i++) {
+                if (enablers[currentEnabler].pendingPricePerSegment < priceFloor) {
+                    priceFloor = enablers[currentEnabler].pendingPricePerSegment;
                 }
 
-                currentTranscoder = transcoderPool.getNext(currentTranscoder);
+                currentEnabler = enablerPool.getNext(currentEnabler);
             }
 
             // Provided pricePerSegment must be greater than or equal to the price floor and
@@ -1746,14 +1739,14 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
 
             t.pendingPricePerSegment = _pricePerSegment;
 
-            emit TranscoderUpdate(msg.sender, t.pendingRewardCut, t.pendingFeeShare, _pricePerSegment, true);
+            emit EnablerUpdate(msg.sender, t.pendingRewardCut, t.pendingFeeShare, _pricePerSegment, true);
         } else {
             // It is not the lock period of the current round
             // Caller is free to change rewardCut, feeShare, pricePerSegment as it pleases
-            // If caller is not a registered transcoder, it can also register and join the transcoder pool
+            // If caller is not a registered enabler, it can also register and join the enabler pool
             // if it has sufficient delegated stake
-            // If caller is not a registered transcoder and does not have sufficient delegated stake
-            // to join the transcoder pool, it can change rewardCut, feeShare, pricePerSegment
+            // If caller is not a registered enabler and does not have sufficient delegated stake
+            // to join the enabler pool, it can change rewardCut, feeShare, pricePerSegment
             // as information signals to delegators in an effort to camapaign and accumulate
             // more delegated stake
 
@@ -1771,34 +1764,34 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
 
             uint256 delegatedAmount = del.delegatedAmount;
 
-            // Check if transcoder is not already registered
-            if (transcoderStatus(msg.sender) == TranscoderStatus.NotRegistered) {
-                if (!transcoderPool.isFull()) {
-                    // If pool is not full add new transcoder
-                    transcoderPool.insert(msg.sender, delegatedAmount, address(0), address(0));
+            // Check if enabler is not already registered
+            if (enablerStatus(msg.sender) == EnablerStatus.NotRegistered) {
+                if (!enablerPool.isFull()) {
+                    // If pool is not full add new enabler
+                    enablerPool.insert(msg.sender, delegatedAmount, address(0), address(0));
                 } else {
-                    address lastTranscoder = transcoderPool.getLast();
+                    address lastEnabler = enablerPool.getLast();
 
-                    if (delegatedAmount > transcoderPool.getKey(lastTranscoder)) {
-                        // If pool is full and caller has more delegated stake than the transcoder in the pool with the least delegated stake:
-                        // - Evict transcoder in pool with least delegated stake
+                    if (delegatedAmount > enablerPool.getKey(lastEnabler)) {
+                        // If pool is full and caller has more delegated stake than the enabler in the pool with the least delegated stake:
+                        // - Evict enabler in pool with least delegated stake
                         // - Add caller to pool
-                        transcoderPool.remove(lastTranscoder);
-                        transcoderPool.insert(msg.sender, delegatedAmount, address(0), address(0));
+                        enablerPool.remove(lastEnabler);
+                        enablerPool.insert(msg.sender, delegatedAmount, address(0), address(0));
 
-                        emit TranscoderEvicted(lastTranscoder);
+                        emit EnablerEvicted(lastEnabler);
                     }
                 }
             }
 
-            emit TranscoderUpdate(msg.sender, _rewardCut, _feeShare, _pricePerSegment, transcoderPool.contains(msg.sender));
+            emit EnablerUpdate(msg.sender, _rewardCut, _feeShare, _pricePerSegment, enablerPool.contains(msg.sender));
         }
     }
 
     /**
      * @dev Delegate stake towards a specific address.
-     * @param _amount The amount of LPT to stake.
-     * @param _to The address of the transcoder to stake towards.
+     * @param _amount The amount of MGC to stake.
+     * @param _to The address of the enabler to stake towards.
      */
     function bond(
         uint256 _amount,
@@ -1825,12 +1818,12 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
             // Unbonded state = no existing delegate and no bonded stake
             // Thus, delegation amount = provided amount
         } else if (del.delegateAddress != address(0) && _to != del.delegateAddress) {
-            // A registered transcoder cannot delegate its bonded stake toward another address
+            // A registered enabler cannot delegate its bonded stake toward another address
             // because it can only be delegated toward itself
-            // In the future, if delegation towards another registered transcoder as an already
-            // registered transcoder becomes useful (i.e. for transitive delegation), this restriction
+            // In the future, if delegation towards another registered enabler as an already
+            // registered enabler becomes useful (i.e. for transitive delegation), this restriction
             // could be removed
-            require(transcoderStatus(msg.sender) == TranscoderStatus.NotRegistered);
+            require(enablerStatus(msg.sender) == EnablerStatus.NotRegistered);
             // Changing delegate
             // Set start round
             del.startRound = currentRound.add(1);
@@ -1839,10 +1832,10 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
             // Decrease old delegate's delegated amount
             delegators[currentDelegate].delegatedAmount = delegators[currentDelegate].delegatedAmount.sub(del.bondedAmount);
 
-            if (transcoderStatus(currentDelegate) == TranscoderStatus.Registered) {
-                // Previously delegated to a transcoder
-                // Decrease old transcoder's total stake
-                transcoderPool.updateKey(currentDelegate, transcoderPool.getKey(currentDelegate).sub(del.bondedAmount), address(0), address(0));
+            if (enablerStatus(currentDelegate) == EnablerStatus.Registered) {
+                // Previously delegated to a enabler
+                // Decrease old enabler's total stake
+                enablerPool.updateKey(currentDelegate, enablerPool.getKey(currentDelegate).sub(del.bondedAmount), address(0), address(0));
             }
         }
 
@@ -1853,10 +1846,10 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
         // Update current delegate's delegated amount with delegation amount
         delegators[_to].delegatedAmount = delegators[_to].delegatedAmount.add(delegationAmount);
 
-        if (transcoderStatus(_to) == TranscoderStatus.Registered) {
-            // Delegated to a transcoder
-            // Increase transcoder's total stake
-            transcoderPool.updateKey(_to, transcoderPool.getKey(del.delegateAddress).add(delegationAmount), address(0), address(0));
+        if (enablerStatus(_to) == EnablerStatus.Registered) {
+            // Delegated to a enabler
+            // Increase enabler's total stake
+            enablerPool.updateKey(_to, enablerPool.getKey(del.delegateAddress).add(delegationAmount), address(0), address(0));
         }
 
         if (_amount > 0) {
@@ -1864,7 +1857,7 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
             del.bondedAmount = del.bondedAmount.add(_amount);
             // Update total bonded tokens
             totalBonded = totalBonded.add(_amount);
-            // Transfer the LPT to the Minter
+            // Transfer the MGC to the Minter
             magicToken().transferFrom(msg.sender, minter(), _amount);
         }
 
@@ -1910,13 +1903,13 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
         // Update total bonded tokens
         totalBonded = totalBonded.sub(_amount);
 
-        if (transcoderStatus(del.delegateAddress) == TranscoderStatus.Registered && (del.delegateAddress != msg.sender || del.bondedAmount > 0)) {
-            // A transcoder's delegated stake within the registered pool needs to be decreased if:
-            // - The caller's delegate is a registered transcoder
+        if (enablerStatus(del.delegateAddress) == EnablerStatus.Registered && (del.delegateAddress != msg.sender || del.bondedAmount > 0)) {
+            // A enabler's delegated stake within the registered pool needs to be decreased if:
+            // - The caller's delegate is a registered enabler
             // - Caller is not delegated to self OR caller is delegated to self and has a non-zero bonded amount
             // If the caller is delegated to self and has a zero bonded amount, it will be removed from the
-            // transcoder pool so its delegated stake within the pool does not need to be decreased
-            transcoderPool.updateKey(del.delegateAddress, transcoderPool.getKey(del.delegateAddress).sub(_amount), address(0), address(0));
+            // enabler pool so its delegated stake within the pool does not need to be decreased
+            enablerPool.updateKey(del.delegateAddress, enablerPool.getKey(del.delegateAddress).sub(_amount), address(0), address(0));
         }
 
         // Check if delegator has a zero bonded amount
@@ -1927,9 +1920,9 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
             // Delegator does not have a start round if it is no longer delegated to anyone
             del.startRound = 0;
 
-            if (transcoderStatus(msg.sender) == TranscoderStatus.Registered) {
-                // If caller is a registered transcoder and is no longer bonded, resign
-                resignTranscoder(msg.sender);
+            if (enablerStatus(msg.sender) == EnablerStatus.Registered) {
+                // If caller is a registered enabler and is no longer bonded, resign
+                resignEnabler(msg.sender);
             }
         }
 
@@ -2004,7 +1997,7 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
         // Delete unbonding lock
         delete del.unbondingLocks[_unbondingLockId];
 
-        // Tell Minter to transfer stake (LPT) to the delegator
+        // Tell Minter to transfer stake (MGC) to the delegator
         minter().trustedTransferTokens(msg.sender, amount);
 
         emit WithdrawStake(msg.sender, _unbondingLockId, amount, withdrawRound);
@@ -2032,25 +2025,25 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
     }
 
     /**
-     * @dev Set active transcoder set for the current round
+     * @dev Set active enabler set for the current round
      */
-    function setActiveTranscoders() external whenSystemNotPaused onlyRoundsManager {
+    function setActiveEnablers() external whenSystemNotPaused onlyRoundsManager {
         uint256 currentRound = roundsManager().currentRound();
-        uint256 activeSetSize = Math.min(numActiveTranscoders, transcoderPool.getSize());
+        uint256 activeSetSize = Math.min(numActiveEnablers, enablerPool.getSize());
 
         uint256 totalStake = 0;
-        address currentTranscoder = transcoderPool.getFirst();
+        address currentEnabler = enablerPool.getFirst();
 
         for (uint256 i = 0; i < activeSetSize; i++) {
-            activeTranscoderSet[currentRound].transcoders.push(currentTranscoder);
-            activeTranscoderSet[currentRound].isActive[currentTranscoder] = true;
+            activeEnablerSet[currentRound].enablers.push(currentEnabler);
+            activeEnablerSet[currentRound].isActive[currentEnabler] = true;
 
-            uint256 stake = transcoderPool.getKey(currentTranscoder);
-            uint256 rewardCut = transcoders[currentTranscoder].pendingRewardCut;
-            uint256 feeShare = transcoders[currentTranscoder].pendingFeeShare;
-            uint256 pricePerSegment = transcoders[currentTranscoder].pendingPricePerSegment;
+            uint256 stake = enablerPool.getKey(currentEnabler);
+            uint256 rewardCut = enablers[currentEnabler].pendingRewardCut;
+            uint256 feeShare = enablers[currentEnabler].pendingFeeShare;
+            uint256 pricePerSegment = enablers[currentEnabler].pendingPricePerSegment;
 
-            Transcoder storage t = transcoders[currentTranscoder];
+            Enabler storage t = enablers[currentEnabler];
             // Set pending rates as current rates
             t.rewardCut = rewardCut;
             t.feeShare = feeShare;
@@ -2060,45 +2053,45 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
 
             totalStake = totalStake.add(stake);
 
-            // Get next transcoder in the pool
-            currentTranscoder = transcoderPool.getNext(currentTranscoder);
+            // Get next enabler in the pool
+            currentEnabler = enablerPool.getNext(currentEnabler);
         }
 
-        // Update total stake of all active transcoders
-        activeTranscoderSet[currentRound].totalStake = totalStake;
+        // Update total stake of all active enablers
+        activeEnablerSet[currentRound].totalStake = totalStake;
     }
 
     /**
-     * @dev Distribute the token rewards to transcoder and delegates.
-     * Active transcoders call this once per cycle when it is their turn.
+     * @dev Distribute the token rewards to enabler and delegates.
+     * Active enablers call this once per cycle when it is their turn.
      */
     function reward() external whenSystemNotPaused currentRoundInitialized {
         uint256 currentRound = roundsManager().currentRound();
 
-        // Sender must be an active transcoder
-        require(activeTranscoderSet[currentRound].isActive[msg.sender]);
+        // Sender must be an active enabler
+        require(activeEnablerSet[currentRound].isActive[msg.sender]);
 
-        // Transcoder must not have called reward for this round already
-        require(transcoders[msg.sender].lastRewardRound != currentRound);
-        // Set last round that transcoder called reward
-        transcoders[msg.sender].lastRewardRound = currentRound;
+        // Enabler must not have called reward for this round already
+        require(enablers[msg.sender].lastRewardRound != currentRound);
+        // Set last round that enabler called reward
+        enablers[msg.sender].lastRewardRound = currentRound;
 
-        // Create reward based on active transcoder's stake relative to the total active stake
-        // rewardTokens = (current mintable tokens for the round * active transcoder stake) / total active stake
-        uint256 rewardTokens = minter().createReward(activeTranscoderTotalStake(msg.sender, currentRound), activeTranscoderSet[currentRound].totalStake);
+        // Create reward based on active enabler's stake relative to the total active stake
+        // rewardTokens = (current mintable tokens for the round * active enabler stake) / total active stake
+        uint256 rewardTokens = minter().createReward(activeEnablerTotalStake(msg.sender, currentRound), activeEnablerSet[currentRound].totalStake);
 
-        updateTranscoderWithRewards(msg.sender, rewardTokens, currentRound);
+        updateEnablerWithRewards(msg.sender, rewardTokens, currentRound);
 
         emit Reward(msg.sender, rewardTokens);
     }
 
     /**
-     * @dev Update transcoder's fee pool
-     * @param _transcoder Transcoder address
+     * @dev Update enabler's fee pool
+     * @param _enabler Enabler address
      * @param _fees Fees from verified job claims
      */
-    function updateTranscoderWithFees(
-        address _transcoder,
+    function updateEnablerWithFees(
+        address _enabler,
         uint256 _fees,
         uint256 _round
     )
@@ -2106,10 +2099,10 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
         whenSystemNotPaused
         onlyJobsManager
     {
-        // Transcoder must be registered
-        require(transcoderStatus(_transcoder) == TranscoderStatus.Registered);
+        // Enabler must be registered
+        require(enablerStatus(_enabler) == EnablerStatus.Registered);
 
-        Transcoder storage t = transcoders[_transcoder];
+        Enabler storage t = enablers[_enabler];
 
         EarningsPool.Data storage earningsPool = t.earningsPoolPerRound[_round];
         // Add fees to fee pool
@@ -2117,14 +2110,14 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
     }
 
     /**
-     * @dev Slash a transcoder. Slashing can be invoked by the protocol or a finder.
-     * @param _transcoder Transcoder address
-     * @param _finder Finder that proved a transcoder violated a slashing condition. Null address if there is no finder
-     * @param _slashAmount Percentage of transcoder bond to be slashed
+     * @dev Slash a enabler. Slashing can be invoked by the protocol or a finder.
+     * @param _enabler Enabler address
+     * @param _finder Finder that proved a enabler violated a slashing condition. Null address if there is no finder
+     * @param _slashAmount Percentage of enabler bond to be slashed
      * @param _finderFee Percentage of penalty awarded to finder. Zero if there is no finder
      */
-    function slashTranscoder(
-        address _transcoder,
+    function slashEnabler(
+        address _enabler,
         address _finder,
         uint256 _slashAmount,
         uint256 _finderFee
@@ -2133,10 +2126,10 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
         whenSystemNotPaused
         onlyJobsManager
     {
-        Delegator storage del = delegators[_transcoder];
+        Delegator storage del = delegators[_enabler];
 
         if (del.bondedAmount > 0) {
-            uint256 penalty = MathUtils.percOf(delegators[_transcoder].bondedAmount, _slashAmount);
+            uint256 penalty = MathUtils.percOf(delegators[_enabler].bondedAmount, _slashAmount);
 
             // Decrease bonded stake
             del.bondedAmount = del.bondedAmount.sub(penalty);
@@ -2144,14 +2137,14 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
             // If still bonded
             // - Decrease delegate's delegated amount
             // - Decrease total bonded tokens
-            if (delegatorStatus(_transcoder) == DelegatorStatus.Bonded) {
+            if (delegatorStatus(_enabler) == DelegatorStatus.Bonded) {
                 delegators[del.delegateAddress].delegatedAmount = delegators[del.delegateAddress].delegatedAmount.sub(penalty);
                 totalBonded = totalBonded.sub(penalty);
             }
 
-            // If registered transcoder, resign it
-            if (transcoderStatus(_transcoder) == TranscoderStatus.Registered) {
-                resignTranscoder(_transcoder);
+            // If registered enabler, resign it
+            if (enablerStatus(_enabler) == EnablerStatus.Registered) {
+                resignEnabler(_enabler);
             }
 
             // Account for penalty
@@ -2165,59 +2158,59 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
                 // Minter burns the slashed funds - finder reward
                 minter().trustedBurnTokens(burnAmount.sub(finderAmount));
 
-                emit TranscoderSlashed(_transcoder, _finder, penalty, finderAmount);
+                emit EnablerSlashed(_enabler, _finder, penalty, finderAmount);
             } else {
                 // Minter burns the slashed funds
                 minter().trustedBurnTokens(burnAmount);
 
-                emit TranscoderSlashed(_transcoder, address(0), penalty, 0);
+                emit EnablerSlashed(_enabler, address(0), penalty, 0);
             }
         } else {
-            emit TranscoderSlashed(_transcoder, _finder, 0, 0);
+            emit EnablerSlashed(_enabler, _finder, 0, 0);
         }
     }
 
     /**
-     * @dev Pseudorandomly elect a currently active transcoder that charges a price per segment less than or equal to the max price per segment for a job
-     * Returns address of elected active transcoder and its price per segment
-     * @param _maxPricePerSegment Max price (in LPT base units) per segment of a stream
-     * @param _blockHash Job creation block hash used as a pseudorandom seed for assigning an active transcoder
+     * @dev Pseudorandomly elect a currently active enabler that charges a price per segment less than or equal to the max price per segment for a job
+     * Returns address of elected active enabler and its price per segment
+     * @param _maxPricePerSegment Max price (in MGC base units) per segment of a stream
+     * @param _blockHash Job creation block hash used as a pseudorandom seed for assigning an active enabler
      * @param _round Job creation round
      */
-    function electActiveTranscoder(uint256 _maxPricePerSegment, bytes32 _blockHash, uint256 _round) external view returns (address) {
-        uint256 activeSetSize = activeTranscoderSet[_round].transcoders.length;
-        // Create array to store available transcoders charging an acceptable price per segment
-        address[] memory availableTranscoders = new address[](activeSetSize);
-        // Keep track of the actual number of available transcoders
-        uint256 numAvailableTranscoders = 0;
-        // Keep track of total stake of available transcoders
-        uint256 totalAvailableTranscoderStake = 0;
+    function electActiveEnabler(uint256 _maxPricePerSegment, bytes32 _blockHash, uint256 _round) external view returns (address) {
+        uint256 activeSetSize = activeEnablerSet[_round].enablers.length;
+        // Create array to store available enablers charging an acceptable price per segment
+        address[] memory availableEnablers = new address[](activeSetSize);
+        // Keep track of the actual number of available enablers
+        uint256 numAvailableEnablers = 0;
+        // Keep track of total stake of available enablers
+        uint256 totalAvailableEnablerStake = 0;
 
         for (uint256 i = 0; i < activeSetSize; i++) {
-            address activeTranscoder = activeTranscoderSet[_round].transcoders[i];
-            // If a transcoder is active and charges an acceptable price per segment add it to the array of available transcoders
-            if (activeTranscoderSet[_round].isActive[activeTranscoder] && transcoders[activeTranscoder].pricePerSegment <= _maxPricePerSegment) {
-                availableTranscoders[numAvailableTranscoders] = activeTranscoder;
-                numAvailableTranscoders++;
-                totalAvailableTranscoderStake = totalAvailableTranscoderStake.add(activeTranscoderTotalStake(activeTranscoder, _round));
+            address activeEnabler = activeEnablerSet[_round].enablers[i];
+            // If a enabler is active and charges an acceptable price per segment add it to the array of available enablers
+            if (activeEnablerSet[_round].isActive[activeEnabler] && enablers[activeEnabler].pricePerSegment <= _maxPricePerSegment) {
+                availableEnablers[numAvailableEnablers] = activeEnabler;
+                numAvailableEnablers++;
+                totalAvailableEnablerStake = totalAvailableEnablerStake.add(activeEnablerTotalStake(activeEnabler, _round));
             }
         }
 
-        if (numAvailableTranscoders == 0) {
-            // There is no currently available transcoder that charges a price per segment less than or equal to the max price per segment for a job
+        if (numAvailableEnablers == 0) {
+            // There is no currently available enabler that charges a price per segment less than or equal to the max price per segment for a job
             return address(0);
         } else {
-            // Pseudorandomly pick an available transcoder weighted by its stake relative to the total stake of all available transcoders
-            uint256 r = uint256(_blockHash) % totalAvailableTranscoderStake;
+            // Pseudorandomly pick an available enabler weighted by its stake relative to the total stake of all available enablers
+            uint256 r = uint256(_blockHash) % totalAvailableEnablerStake;
             uint256 s = 0;
             uint256 j = 0;
 
-            while (s <= r && j < numAvailableTranscoders) {
-                s = s.add(activeTranscoderTotalStake(availableTranscoders[j], _round));
+            while (s <= r && j < numAvailableEnablers) {
+                s = s.add(activeEnablerTotalStake(availableEnablers[j], _round));
                 j++;
             }
 
-            return availableTranscoders[j - 1];
+            return availableEnablers[j - 1];
         }
     }
 
@@ -2248,12 +2241,12 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
         uint256 currentBondedAmount = del.bondedAmount;
 
         for (uint256 i = del.lastClaimRound + 1; i <= _endRound; i++) {
-            EarningsPool.Data storage earningsPool = transcoders[del.delegateAddress].earningsPoolPerRound[i];
+            EarningsPool.Data storage earningsPool = enablers[del.delegateAddress].earningsPoolPerRound[i];
 
-            bool isTranscoder = _delegator == del.delegateAddress;
+            bool isEnabler = _delegator == del.delegateAddress;
             if (earningsPool.hasClaimableShares()) {
                 // Calculate and add reward pool share from this round
-                currentBondedAmount = currentBondedAmount.add(earningsPool.rewardPoolShare(currentBondedAmount, isTranscoder));
+                currentBondedAmount = currentBondedAmount.add(earningsPool.rewardPoolShare(currentBondedAmount, isEnabler));
             }
         }
 
@@ -2275,15 +2268,15 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
         uint256 currentBondedAmount = del.bondedAmount;
 
         for (uint256 i = del.lastClaimRound + 1; i <= _endRound; i++) {
-            EarningsPool.Data storage earningsPool = transcoders[del.delegateAddress].earningsPoolPerRound[i];
+            EarningsPool.Data storage earningsPool = enablers[del.delegateAddress].earningsPoolPerRound[i];
 
             if (earningsPool.hasClaimableShares()) {
-                bool isTranscoder = _delegator == del.delegateAddress;
+                bool isEnabler = _delegator == del.delegateAddress;
                 // Calculate and add fee pool share from this round
-                currentFees = currentFees.add(earningsPool.feePoolShare(currentBondedAmount, isTranscoder));
+                currentFees = currentFees.add(earningsPool.feePoolShare(currentBondedAmount, isEnabler));
                 // Calculate new bonded amount with rewards from this round. Updated bonded amount used
                 // to calculate fee pool share in next round
-                currentBondedAmount = currentBondedAmount.add(earningsPool.rewardPoolShare(currentBondedAmount, isTranscoder));
+                currentBondedAmount = currentBondedAmount.add(earningsPool.rewardPoolShare(currentBondedAmount, isEnabler));
             }
         }
 
@@ -2291,33 +2284,33 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
     }
 
     /**
-     * @dev Returns total bonded stake for an active transcoder
-     * @param _transcoder Address of a transcoder
+     * @dev Returns total bonded stake for an active enabler
+     * @param _enabler Address of a enabler
      */
-    function activeTranscoderTotalStake(address _transcoder, uint256 _round) public view returns (uint256) {
-        // Must be active transcoder
-        require(activeTranscoderSet[_round].isActive[_transcoder]);
+    function activeEnablerTotalStake(address _enabler, uint256 _round) public view returns (uint256) {
+        // Must be active enabler
+        require(activeEnablerSet[_round].isActive[_enabler]);
 
-        return transcoders[_transcoder].earningsPoolPerRound[_round].totalStake;
+        return enablers[_enabler].earningsPoolPerRound[_round].totalStake;
     }
 
     /**
-     * @dev Returns total bonded stake for a transcoder
-     * @param _transcoder Address of transcoder
+     * @dev Returns total bonded stake for a enabler
+     * @param _enabler Address of enabler
      */
-    function transcoderTotalStake(address _transcoder) public view returns (uint256) {
-        return transcoderPool.getKey(_transcoder);
+    function enablerTotalStake(address _enabler) public view returns (uint256) {
+        return enablerPool.getKey(_enabler);
     }
 
     /*
-     * @dev Computes transcoder status
-     * @param _transcoder Address of transcoder
+     * @dev Computes enabler status
+     * @param _enabler Address of enabler
      */
-    function transcoderStatus(address _transcoder) public view returns (TranscoderStatus) {
-        if (transcoderPool.contains(_transcoder)) {
-            return TranscoderStatus.Registered;
+    function enablerStatus(address _enabler) public view returns (EnablerStatus) {
+        if (enablerPool.contains(_enabler)) {
+            return EnablerStatus.Registered;
         } else {
-            return TranscoderStatus.NotRegistered;
+            return EnablerStatus.NotRegistered;
         }
     }
 
@@ -2344,17 +2337,17 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
     }
 
     /**
-     * @dev Return transcoder information
-     * @param _transcoder Address of transcoder
+     * @dev Return enabler information
+     * @param _enabler Address of enabler
      */
-    function getTranscoder(
-        address _transcoder
+    function getEnabler(
+        address _enabler
     )
         public
         view
         returns (uint256 lastRewardRound, uint256 rewardCut, uint256 feeShare, uint256 pricePerSegment, uint256 pendingRewardCut, uint256 pendingFeeShare, uint256 pendingPricePerSegment)
     {
-        Transcoder storage t = transcoders[_transcoder];
+        Enabler storage t = enablers[_enabler];
 
         lastRewardRound = t.lastRewardRound;
         rewardCut = t.rewardCut;
@@ -2366,29 +2359,29 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
     }
 
     /**
-     * @dev Return transcoder's token pools for a given round
-     * @param _transcoder Address of transcoder
+     * @dev Return enabler's token pools for a given round
+     * @param _enabler Address of enabler
      * @param _round Round number
      */
-    function getTranscoderEarningsPoolForRound(
-        address _transcoder,
+    function getEnablerEarningsPoolForRound(
+        address _enabler,
         uint256 _round
     )
         public
         view
-        returns (uint256 rewardPool, uint256 feePool, uint256 totalStake, uint256 claimableStake, uint256 transcoderRewardCut, uint256 transcoderFeeShare, uint256 transcoderRewardPool, uint256 transcoderFeePool, bool hasTranscoderRewardFeePool)
+        returns (uint256 rewardPool, uint256 feePool, uint256 totalStake, uint256 claimableStake, uint256 enablerRewardCut, uint256 enablerFeeShare, uint256 enablerRewardPool, uint256 enablerFeePool, bool hasEnablerRewardFeePool)
     {
-        EarningsPool.Data storage earningsPool = transcoders[_transcoder].earningsPoolPerRound[_round];
+        EarningsPool.Data storage earningsPool = enablers[_enabler].earningsPoolPerRound[_round];
 
         rewardPool = earningsPool.rewardPool;
         feePool = earningsPool.feePool;
         totalStake = earningsPool.totalStake;
         claimableStake = earningsPool.claimableStake;
-        transcoderRewardCut = earningsPool.transcoderRewardCut;
-        transcoderFeeShare = earningsPool.transcoderFeeShare;
-        transcoderRewardPool = earningsPool.transcoderRewardPool;
-        transcoderFeePool = earningsPool.transcoderFeePool;
-        hasTranscoderRewardFeePool = earningsPool.hasTranscoderRewardFeePool;
+        enablerRewardCut = earningsPool.enablerRewardCut;
+        enablerFeeShare = earningsPool.enablerFeeShare;
+        enablerRewardPool = earningsPool.enablerRewardPool;
+        enablerFeePool = earningsPool.enablerFeePool;
+        hasEnablerRewardFeePool = earningsPool.hasEnablerRewardFeePool;
     }
 
     /**
@@ -2432,32 +2425,32 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
     }
 
     /**
-     * @dev Returns max size of transcoder pool
+     * @dev Returns max size of enabler pool
      */
-    function getTranscoderPoolMaxSize() public view returns (uint256) {
-        return transcoderPool.getMaxSize();
+    function getEnablerPoolMaxSize() public view returns (uint256) {
+        return enablerPool.getMaxSize();
     }
 
     /**
-     * @dev Returns size of transcoder pool
+     * @dev Returns size of enabler pool
      */
-    function getTranscoderPoolSize() public view returns (uint256) {
-        return transcoderPool.getSize();
+    function getEnablerPoolSize() public view returns (uint256) {
+        return enablerPool.getSize();
     }
 
     /**
-     * @dev Returns transcoder with most stake in pool
+     * @dev Returns enabler with most stake in pool
      */
-    function getFirstTranscoderInPool() public view returns (address) {
-        return transcoderPool.getFirst();
+    function getFirstEnablerInPool() public view returns (address) {
+        return enablerPool.getFirst();
     }
 
     /**
-     * @dev Returns next transcoder in pool for a given transcoder
-     * @param _transcoder Address of a transcoder in the pool
+     * @dev Returns next enabler in pool for a given enabler
+     * @param _enabler Address of a enabler in the pool
      */
-    function getNextTranscoderInPool(address _transcoder) public view returns (address) {
-        return transcoderPool.getNext(_transcoder);
+    function getNextEnablerInPool(address _enabler) public view returns (address) {
+        return enablerPool.getNext(_enabler);
     }
 
     /**
@@ -2472,24 +2465,24 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
      * @param _round Round number
      */
     function getTotalActiveStake(uint256 _round) public view returns (uint256) {
-        return activeTranscoderSet[_round].totalStake;
+        return activeEnablerSet[_round].totalStake;
     }
 
     /**
-     * @dev Return whether a transcoder was active during a round
-     * @param _transcoder Transcoder address
+     * @dev Return whether a enabler was active during a round
+     * @param _enabler Enabler address
      * @param _round Round number
      */
-    function isActiveTranscoder(address _transcoder, uint256 _round) public view returns (bool) {
-        return activeTranscoderSet[_round].isActive[_transcoder];
+    function isActiveEnabler(address _enabler, uint256 _round) public view returns (bool) {
+        return activeEnablerSet[_round].isActive[_enabler];
     }
 
     /**
-     * @dev Return whether a transcoder is registered
-     * @param _transcoder Transcoder address
+     * @dev Return whether a enabler is registered
+     * @param _enabler Enabler address
      */
-    function isRegisteredTranscoder(address _transcoder) public view returns (bool) {
-        return transcoderStatus(_transcoder) == TranscoderStatus.Registered;
+    function isRegisteredEnabler(address _enabler) public view returns (bool) {
+        return enablerStatus(_enabler) == EnablerStatus.Registered;
     }
 
     /**
@@ -2503,41 +2496,41 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
     }
 
     /**
-     * @dev Remove transcoder
+     * @dev Remove enabler
      */
-    function resignTranscoder(address _transcoder) internal {
+    function resignEnabler(address _enabler) internal {
         uint256 currentRound = roundsManager().currentRound();
-        if (activeTranscoderSet[currentRound].isActive[_transcoder]) {
+        if (activeEnablerSet[currentRound].isActive[_enabler]) {
             // Decrease total active stake for the round
-            activeTranscoderSet[currentRound].totalStake = activeTranscoderSet[currentRound].totalStake.sub(activeTranscoderTotalStake(_transcoder, currentRound));
-            // Set transcoder as inactive
-            activeTranscoderSet[currentRound].isActive[_transcoder] = false;
+            activeEnablerSet[currentRound].totalStake = activeEnablerSet[currentRound].totalStake.sub(activeEnablerTotalStake(_enabler, currentRound));
+            // Set enabler as inactive
+            activeEnablerSet[currentRound].isActive[_enabler] = false;
         }
 
-        // Remove transcoder from pools
-        transcoderPool.remove(_transcoder);
+        // Remove enabler from pools
+        enablerPool.remove(_enabler);
 
-        emit TranscoderResigned(_transcoder);
+        emit EnablerResigned(_enabler);
     }
 
     /**
-     * @dev Update a transcoder with rewards
-     * @param _transcoder Address of transcoder
+     * @dev Update a enabler with rewards
+     * @param _enabler Address of enabler
      * @param _rewards Amount of rewards
-     * @param _round Round that transcoder is updated
+     * @param _round Round that enabler is updated
      */
-    function updateTranscoderWithRewards(address _transcoder, uint256 _rewards, uint256 _round) internal {
-        Transcoder storage t = transcoders[_transcoder];
-        Delegator storage del = delegators[_transcoder];
+    function updateEnablerWithRewards(address _enabler, uint256 _rewards, uint256 _round) internal {
+        Enabler storage t = enablers[_enabler];
+        Delegator storage del = delegators[_enabler];
 
         EarningsPool.Data storage earningsPool = t.earningsPoolPerRound[_round];
         // Add rewards to reward pool
         earningsPool.addToRewardPool(_rewards);
-        // Update transcoder's delegated amount with rewards
+        // Update enabler's delegated amount with rewards
         del.delegatedAmount = del.delegatedAmount.add(_rewards);
-        // Update transcoder's total stake with rewards
-        uint256 newStake = transcoderPool.getKey(_transcoder).add(_rewards);
-        transcoderPool.updateKey(_transcoder, newStake, address(0), address(0));
+        // Update enabler's total stake with rewards
+        uint256 newStake = enablerPool.getKey(_enabler).add(_rewards);
+        enablerPool.updateKey(_enabler, newStake, address(0), address(0));
         // Update total bonded tokens with claimable rewards
         totalBonded = totalBonded.add(_rewards);
     }
@@ -2564,12 +2557,12 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
             uint256 currentFees = del.fees;
 
             for (uint256 i = del.lastClaimRound + 1; i <= _endRound; i++) {
-                EarningsPool.Data storage earningsPool = transcoders[del.delegateAddress].earningsPoolPerRound[i];
+                EarningsPool.Data storage earningsPool = enablers[del.delegateAddress].earningsPoolPerRound[i];
 
                 if (earningsPool.hasClaimableShares()) {
-                    bool isTranscoder = _delegator == del.delegateAddress;
+                    bool isEnabler = _delegator == del.delegateAddress;
 
-                    (uint256 fees, uint256 rewards) = earningsPool.claimShare(currentBondedAmount, isTranscoder);
+                    (uint256 fees, uint256 rewards) = earningsPool.claimShare(currentBondedAmount, isEnabler);
 
                     currentFees = currentFees.add(fees);
                     currentBondedAmount = currentBondedAmount.add(rewards);
@@ -2604,9 +2597,9 @@ contract StakingManager is ManagerProxyTarget, IStakingManager {
         // Update total bonded tokens
         totalBonded = totalBonded.add(amount);
 
-        if (transcoderStatus(del.delegateAddress) == TranscoderStatus.Registered) {
-            // If delegate is a registered transcoder increase its delegated stake in registered pool
-            transcoderPool.updateKey(del.delegateAddress, transcoderPool.getKey(del.delegateAddress).add(amount), address(0), address(0));
+        if (enablerStatus(del.delegateAddress) == EnablerStatus.Registered) {
+            // If delegate is a registered enabler increase its delegated stake in registered pool
+            enablerPool.updateKey(del.delegateAddress, enablerPool.getKey(del.delegateAddress).add(amount), address(0), address(0));
         }
 
         // Delete lock
